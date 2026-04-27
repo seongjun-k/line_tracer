@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-line_tracer_node.py  v7
+line_tracer_node.py  v8
 ────────────────────────────────────────────────────────
 변경 이력:
   v1 - 기본 단일 ROI + 고정 임계값
@@ -15,6 +15,11 @@ line_tracer_node.py  v7
        에러 변화율 기반 선제 감속
        한쪽 선만 감지 시 강한 회전(±0.8)
        kd 강화
+  v8 - 버그 수정:
+       [fix1] error_rate 계산 시 prev_error를 compute() 호출 전에 저장
+              → compute() 내부에서 prev_error가 갱신되기 전 값 사용
+       [fix2] 직진 speed_scale max(0.5,...) → max(0.15,...) 로 상한 낮춤
+              → 커브 진입 시 감속이 실제로 동작하도록 수정
 ────────────────────────────────────────────────────────
 """
 
@@ -103,7 +108,7 @@ class LineTracer:
 
         self.twist = Twist()
         rospy.on_shutdown(self.shutdown_hook)
-        rospy.loginfo("[LineTracer] v7 시작 | 흰선+폭필터+급커브감속 모드")
+        rospy.loginfo("[LineTracer] v8 시작 | 흰선+폭필터+급커브감속(버그수정) 모드")
 
     # ────────────────────────────────────────────────────────────────────
     # 이미지 콜백
@@ -178,10 +183,12 @@ class LineTracer:
 
         # ── 제어 ─────────────────────────────────────────────────────
         if blended_error is not None:
+            # [fix1] compute() 호출 전에 prev_error 저장 → error_rate 정확히 계산
+            prev_err_snapshot = self.pid.prev_error
             angular_z = self.pid.compute(blended_error)
 
             # ── 에러 변화율 기반 선제 감속 (급커브 대응) ─────────────
-            error_rate = abs(blended_error - self.pid.prev_error) / self.dt
+            error_rate = abs(blended_error - prev_err_snapshot) / self.dt
 
             if error_rate > self.curve_rate_threshold:
                 speed_scale = 0.15        # 급격한 커브 진입 → 최대 감속
@@ -190,7 +197,8 @@ class LineTracer:
             elif abs(blended_error) > 30:
                 speed_scale = 0.35        # 중간 에러 → 감속
             else:
-                speed_scale = max(0.5, 1.0 - abs(angular_z) * 1.0)  # 직진
+                # [fix2] max(0.5 → 0.15) : 커브에서도 감속이 실제 동작하도록
+                speed_scale = max(0.15, 1.0 - abs(angular_z) * 1.5)
 
             dynamic_speed = self.linear_speed * speed_scale
             self._publish_cmd(dynamic_speed, angular_z)
@@ -206,8 +214,8 @@ class LineTracer:
             cv2.circle(debug, (w//2,     near_cy), 11, (255,0,255),  2)
             cv2.line(debug, (w//2, near_cy), (target_x, near_cy), (0,165,255), 2)
             cv2.putText(debug,
-                        f"{mode} err={blended_error:+.0f} ang={angular_z:+.3f} spd={dynamic_speed:.3f}",
-                        (5, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0,255,0), 2)
+                        f"{mode} err={blended_error:+.0f} ang={angular_z:+.3f} spd={dynamic_speed:.3f} rate={error_rate:.0f}",
+                        (5, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.50, (0,255,0), 2)
 
         elif near_left_cx is not None:
             # ── 왼쪽 선만 → 오른쪽 강한 회전 ────────────────────────
