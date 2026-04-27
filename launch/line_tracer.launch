@@ -1,0 +1,29 @@
+<?xml version="1.0"?>
+<launch>
+  <node name="line_tracer_node"
+        pkg="line_tracer"
+        type="line_tracer_node.py"
+        output="screen">
+    <param name="camera_topic"         value="/camera/image" />
+    <param name="linear_speed"         value="0.07" />
+    <param name="kp"                   value="0.004" />
+    <param name="ki"                   value="0.0" />
+    <param name="kd"                   value="0.003" />
+    <param name="dt"                   value="0.05" />
+    <param name="flip_image"           value="false" />
+    <param name="white_threshold"      value="170" />
+    <param name="min_line_area"        value="80" />
+    <param name="max_blob_width_ratio" value="0.35" />
+
+    <!-- FAR ROI 완전히 끄기: near와 같은 위치로 겹침 -->
+    <param name="far_start_ratio"      value="0.75" />
+    <param name="far_end_ratio"        value="0.85" />
+    <param name="near_start_ratio"     value="0.80" />
+
+    <!-- far 가중치 0 = near만 사용 -->
+    <param name="far_weight"           value="0.0" />
+    <param name="near_weight"          value="1.0" />
+
+    <param name="show_debug_window"    value="true" />
+  </node>
+</launch>

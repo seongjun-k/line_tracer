@@ -1,0 +1,26 @@
+# ── line_tracer 파라미터 ──────────────────────────────────────────────
+# launch 파일의 <param> 값이 우선순위 높음 (이 파일은 기본값 참조용)
+
+line_tracer_node:
+  # 카메라 토픽
+  camera_topic: /camera/image
+
+  # 직진 속도 (m/s) — TurtleBot3 Burger 최대 0.22 m/s
+  linear_speed: 0.15
+
+  # PID 이득
+  # Kp: 비례 (크면 반응 빠르지만 진동 발생)
+  # Ki: 적분 (지속 오프셋 제거, 보통 매우 작게)
+  # Kd: 미분 (진동 감쇠, 너무 크면 노이즈 증폭)
+  kp: 0.005
+  ki: 0.0001
+  kd: 0.001
+  dt: 0.05                   # 제어 주기 (초)
+
+  # 이미지 처리
+  white_threshold: 200       # 흰색 픽셀 임계값 (어두운 환경: 낮추기)
+  roi_top_ratio: 0.55        # 이미지 상단 무시 비율
+  min_white_area: 500        # 흰색 최소 픽셀 수 (노이즈 제거)
+
+  # 디버그
+  show_debug_window: true    # cv2.imshow 창 표시 (GUI 없을 때 false)
