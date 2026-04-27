@@ -2,24 +2,21 @@
 # -*- coding: utf-8 -*-
 
 """
-line_tracer_node.py  v8
+line_tracer_node.py  v9
 ────────────────────────────────────────────────────────
 변경 이력:
-  v1 - 기본 단일 ROI + 고정 임계값
-  v2 - 비선형 PID (에러 크기별 Kp 자동 증가)
-  v3 - 적응형 임계값 (흰 바닥 노이즈 제거)
-  v4 - 듀얼 ROI Lookahead
-  v5 - 검은 트랙 추적 시도
-  v6 - 흰선 + 컨투어 폭 필터로 바닥 블롭 제거
-  v7 - 급격한 커브 대응:
-       에러 변화율 기반 선제 감속
-       한쪽 선만 감지 시 강한 회전(±0.8)
-       kd 강화
-  v8 - 버그 수정:
-       [fix1] error_rate 계산 시 prev_error를 compute() 호출 전에 저장
-              → compute() 내부에서 prev_error가 갱신되기 전 값 사용
-       [fix2] 직진 speed_scale max(0.5,...) → max(0.15,...) 로 상한 낮춤
-              → 커브 진입 시 감속이 실제로 동작하도록 수정
+  v1  - 기본 단일 ROI + 고정 임계값
+  v2  - 비선형 PID (에러 크기별 Kp 자동 증가)
+  v3  - 적응형 임계값 (흰 바닥 노이즈 제거)
+  v4  - 듀얼 ROI Lookahead
+  v5  - 검은 트랙 추적 시도
+  v6  - 흰선 + 컨투어 폭 필터로 바닥 블롭 제거
+  v7  - 에러 변화율 기반 급커브 선제 감속, 한쪽 선 강한 회전
+  v8  - 버그 수정: error_rate 계산 순서, 직진 speed_scale 상한 낮춤
+  v9  - Last Known Error 유지 로직:
+        선이 사라졌을 때 무조건 고정 회전 대신
+        직전 에러로 PID 계속 실행 (최대 lost_max_frames 프레임)
+        프레임 초과 시에만 정지
 ────────────────────────────────────────────────────────
 """
 
@@ -88,16 +85,23 @@ class LineTracer:
         # 듀얼 ROI
         self.far_start_ratio      = rospy.get_param('~far_start_ratio',      0.75)
         self.far_end_ratio        = rospy.get_param('~far_end_ratio',        0.85)
-        self.near_start_ratio     = rospy.get_param('~near_start_ratio',     0.80)
+        self.near_start_ratio     = rospy.get_param('~near_start_ratio',     0.65)
         self.far_weight           = rospy.get_param('~far_weight',           0.0)
         self.near_weight          = rospy.get_param('~near_weight',          1.0)
 
         # 급커브 감속 임계값
-        self.curve_rate_threshold = rospy.get_param('~curve_rate_threshold', 200.0)
+        self.curve_rate_threshold = rospy.get_param('~curve_rate_threshold', 150.0)
 
-        # ── PID ─────────────────────────────────────────────────────────
+        # [v9] Last Known Error 유지 최대 프레임 수 (launch에서 조정 가능)
+        self.lost_max_frames      = rospy.get_param('~lost_max_frames',      8)
+
+        # ── PID + 상태 저장 ─────────────────────────────────────────────
         self.pid    = PIDController(self.kp, self.ki, self.kd, self.dt)
         self.bridge = CvBridge()
+
+        # [v9] 마지막으로 인식한 에러와 소실 프레임 카운터
+        self.last_known_error = 0.0
+        self.lost_frames      = 0
 
         # ── ROS 통신 ─────────────────────────────────────────────────────
         self.cmd_pub   = rospy.Publisher('/cmd_vel', Twist, queue_size=10)
@@ -108,10 +112,8 @@ class LineTracer:
 
         self.twist = Twist()
         rospy.on_shutdown(self.shutdown_hook)
-        rospy.loginfo("[LineTracer] v8 시작 | 흰선+폭필터+급커브감속(버그수정) 모드")
+        rospy.loginfo("[LineTracer] v9 시작 | Last Known Error 유지 모드")
 
-    # ────────────────────────────────────────────────────────────────────
-    # 이미지 콜백
     # ────────────────────────────────────────────────────────────────────
     def image_callback(self, msg):
         try:
@@ -119,14 +121,10 @@ class LineTracer:
         except CvBridgeError as e:
             rospy.logerr("[LineTracer] CvBridge 오류: %s", e)
             return
-
         if self.flip_image:
             frame = cv2.flip(frame, 1)
-
         self.process_frame(frame)
 
-    # ────────────────────────────────────────────────────────────────────
-    # 이미지 처리 + 제어
     # ────────────────────────────────────────────────────────────────────
     def process_frame(self, frame):
         h, w = frame.shape[:2]
@@ -153,7 +151,7 @@ class LineTracer:
         near_error = None
 
         if far_left_cx is not None and far_right_cx is not None:
-            far_error  = (far_left_cx + far_right_cx) / 2.0 - w / 2.0
+            far_error = (far_left_cx + far_right_cx) / 2.0 - w / 2.0
         if near_left_cx is not None and near_right_cx is not None:
             near_error = (near_left_cx + near_right_cx) / 2.0 - w / 2.0
 
@@ -181,29 +179,30 @@ class LineTracer:
         far_cy  = (far_start + far_end) // 2
         near_cy = (near_start + h) // 2
 
-        # ── 제어 ─────────────────────────────────────────────────────
+        # ────────────────────────────────────────────────────────────────────
+        # 제어 — [v9] 선 소실 시 Last Known Error 로직 적용
+        # ────────────────────────────────────────────────────────────────────
         if blended_error is not None:
-            # [fix1] compute() 호출 전에 prev_error 저장 → error_rate 정확히 계산
+            # 선 정상 인식 → 마지막 에러 갱신, 소실 프레임 리셋
+            self.last_known_error = blended_error
+            self.lost_frames = 0
+
             prev_err_snapshot = self.pid.prev_error
             angular_z = self.pid.compute(blended_error)
-
-            # ── 에러 변화율 기반 선제 감속 (급커브 대응) ─────────────
             error_rate = abs(blended_error - prev_err_snapshot) / self.dt
 
             if error_rate > self.curve_rate_threshold:
-                speed_scale = 0.15        # 급격한 커브 진입 → 최대 감속
+                speed_scale = 0.15
             elif abs(blended_error) > 50:
-                speed_scale = 0.20        # 큰 에러 → 강한 감속
+                speed_scale = 0.20
             elif abs(blended_error) > 30:
-                speed_scale = 0.35        # 중간 에러 → 감속
+                speed_scale = 0.35
             else:
-                # [fix2] max(0.5 → 0.15) : 커브에서도 감속이 실제 동작하도록
                 speed_scale = max(0.15, 1.0 - abs(angular_z) * 1.5)
 
             dynamic_speed = self.linear_speed * speed_scale
             self._publish_cmd(dynamic_speed, angular_z)
 
-            # 디버그 점
             if far_left_cx   is not None: cv2.circle(debug, (far_left_cx,   far_cy),  7, (0,180,0),   -1)
             if far_right_cx  is not None: cv2.circle(debug, (far_right_cx,  far_cy),  7, (0,0,180),   -1)
             if near_left_cx  is not None: cv2.circle(debug, (near_left_cx,  near_cy), 9, (0,255,0),   -1)
@@ -214,31 +213,29 @@ class LineTracer:
             cv2.circle(debug, (w//2,     near_cy), 11, (255,0,255),  2)
             cv2.line(debug, (w//2, near_cy), (target_x, near_cy), (0,165,255), 2)
             cv2.putText(debug,
-                        f"{mode} err={blended_error:+.0f} ang={angular_z:+.3f} spd={dynamic_speed:.3f} rate={error_rate:.0f}",
+                        f"{mode} err={blended_error:+.0f} ang={angular_z:+.3f} spd={dynamic_speed:.3f}",
                         (5, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.50, (0,255,0), 2)
 
-        elif near_left_cx is not None:
-            # ── 왼쪽 선만 → 오른쪽 강한 회전 ────────────────────────
-            self.pid.reset()
-            self._publish_cmd(0.03, -0.8)
-            cv2.circle(debug, (near_left_cx, near_cy), 9, (0,255,0), -1)
-            cv2.putText(debug, "LEFT ONLY  >> SHARP RIGHT",
-                        (5, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0,100,255), 2)
-
-        elif near_right_cx is not None:
-            # ── 오른쪽 선만 → 왼쪽 강한 회전 ───────────────────────
-            self.pid.reset()
-            self._publish_cmd(0.03, 0.8)
-            cv2.circle(debug, (near_right_cx, near_cy), 9, (0,0,255), -1)
-            cv2.putText(debug, "RIGHT ONLY  << SHARP LEFT",
-                        (5, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0,100,255), 2)
-
         else:
-            # ── 선 없음 → 정지 ────────────────────────────────────────
-            self.pid.reset()
-            self._publish_cmd(0.0, 0.0)
-            cv2.putText(debug, "NO LINE  -- STOP",
-                        (5, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0,0,255), 2)
+            # ── [v9] 선 없음: Last Known Error로 코스 유지 ────────────────
+            self.lost_frames += 1
+
+            if self.lost_frames <= self.lost_max_frames:
+                # 직전 에러 방향으로 PID 계속 실행
+                angular_z    = self.pid.compute(self.last_known_error)
+                dynamic_speed = self.linear_speed * 0.15  # 느린 속도로 커브 진행
+                self._publish_cmd(dynamic_speed, angular_z)
+
+                remaining = self.lost_max_frames - self.lost_frames
+                cv2.putText(debug,
+                            f"LOST [{remaining}] last_err={self.last_known_error:+.0f} ang={angular_z:+.3f}",
+                            (5, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.50, (0,165,255), 2)
+            else:
+                # 프레임 초과 → 전수정지
+                self.pid.reset()
+                self._publish_cmd(0.0, 0.0)
+                cv2.putText(debug, "NO LINE  -- STOP",
+                            (5, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0,0,255), 2)
 
         # ── 미니맵 ────────────────────────────────────────────────────
         mini_h = max(1, (h - near_start) // 3)
@@ -257,10 +254,7 @@ class LineTracer:
             cv2.waitKey(1)
 
     # ────────────────────────────────────────────────────────────────────
-    # 헬퍼
-    # ────────────────────────────────────────────────────────────────────
     def _binarize_white(self, roi):
-        """흰색 픽셀 이진화"""
         gray  = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
         blur  = cv2.GaussianBlur(gray, (5, 5), 0)
         _, binary = cv2.threshold(blur, self.white_threshold, 255, cv2.THRESH_BINARY)
@@ -268,32 +262,22 @@ class LineTracer:
         return cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
 
     def _get_line_cx(self, binary_roi, offset_x, roi_w):
-        """
-        흰 컨투어 중 선에 해당하는 것만 골라 무게중심 반환
-        핵심 필터: 가로 폭이 roi_w * max_blob_width_ratio 이상이면 바닥으로 판단 제거
-        """
         contours, _ = cv2.findContours(binary_roi, cv2.RETR_EXTERNAL,
                                        cv2.CHAIN_APPROX_SIMPLE)
         best_cx   = None
         best_area = 0
-
         for cnt in contours:
             area = cv2.contourArea(cnt)
             if area < self.min_line_area:
                 continue
-
             x, y, bw, bh = cv2.boundingRect(cnt)
-
-            # 바닥 블롭 제거: 가로가 ROI 폭의 max_blob_width_ratio 이상이면 제거
             if bw > roi_w * self.max_blob_width_ratio:
                 continue
-
             if area > best_area:
                 best_area = area
                 M = cv2.moments(cnt)
                 if M['m00'] > 0:
                     best_cx = int(M['m10'] / M['m00']) + offset_x
-
         return best_cx
 
     def _publish_cmd(self, linear, angular):
