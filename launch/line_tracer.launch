@@ -21,26 +21,29 @@
     <param name="max_blob_width_ratio" value="0.35" />
 
     <!--
-      [v10] 2단 ROI
+      [v10] 2단 ROI — 정면 카메라 기준 (선이 화면 하단에 맺힘)
       ┌─────────────────────┐  ← 0%
       │                     │
-      │  [주황] 예측 ROI    │  ← predict_start_ratio (0.42)
-      │  PRED  42% ~ 56%   │
-      │  [주황끝]           │  ← predict_end_ratio   (0.56)
+      │   (배경/하늘/벽)     │
       │                     │
-      │  [빨강] 주행 ROI    │  ← drive_start_ratio   (0.58)
-      │  DRIVE 58% ~ 82%   │
-      │  [빨강끝]           │  ← drive_end_ratio     (0.82)
+      │  [주황] 예측 ROI    │  ← predict_start_ratio (0.65)
+      │  PRED  65% ~ 75%   │
+      │  [주황끝]           │  ← predict_end_ratio   (0.75)
+      │                     │
+      │  [빨강] 주행 ROI    │  ← drive_start_ratio   (0.77)
+      │  DRIVE 77% ~ 95%   │
+      │  [빨강끝]           │  ← drive_end_ratio     (0.95)
       │                     │
       └─────────────────────┘  ← 100%
 
       최종 조향 = DRIVE * 0.75 + PREDICT * 0.25
-      선이 화면 위에 있으면 predict_start_ratio를 낮추세요.
+      선이 두 박스 모두 위에 있으면 predict_start_ratio를 더 낮추세요.
+      선이 두 박스 아래(화면 밖)면 카메라를 아래로 기울이세요.
     -->
-    <param name="predict_start_ratio"  value="0.42" />
-    <param name="predict_end_ratio"    value="0.56" />
-    <param name="drive_start_ratio"    value="0.58" />
-    <param name="drive_end_ratio"      value="0.82" />
+    <param name="predict_start_ratio"  value="0.65" />
+    <param name="predict_end_ratio"    value="0.75" />
+    <param name="drive_start_ratio"    value="0.77" />
+    <param name="drive_end_ratio"      value="0.95" />
     <param name="drive_weight"         value="0.75" />
     <param name="predict_weight"       value="0.25" />
 
