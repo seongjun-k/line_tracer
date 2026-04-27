@@ -5,24 +5,42 @@
         type="line_tracer_node.py"
         output="screen">
     <param name="camera_topic"         value="/camera/image" />
-    <param name="linear_speed"         value="0.07" />
+
+    <!-- 속도: 라인 폭이 좁을수록 낮게 설정 -->
+    <param name="linear_speed"         value="0.06" />
+
+    <!-- PID 이득 -->
     <param name="kp"                   value="0.004" />
     <param name="ki"                   value="0.0" />
-    <param name="kd"                   value="0.003" />
+    <!-- kd: 듀얼 ROI 사용 시 진동 억제 위해 높게 -->
+    <param name="kd"                   value="0.005" />
     <param name="dt"                   value="0.05" />
     <param name="flip_image"           value="false" />
+
+    <!-- 흰 선 검출 -->
     <param name="white_threshold"      value="170" />
     <param name="min_line_area"        value="80" />
     <param name="max_blob_width_ratio" value="0.35" />
 
-    <!-- FAR ROI 완전히 끄기: near와 같은 위치로 겹침 -->
-    <param name="far_start_ratio"      value="0.75" />
-    <param name="far_end_ratio"        value="0.85" />
-    <param name="near_start_ratio"     value="0.80" />
+    <!--
+      [개선] Near ROI 확장: 0.80 → 0.65
+        화면 하단 20% → 35% 구간을 인식
+        커브 진입 전에 선을 더 일찍 감지해 이탈 방지
+    -->
+    <param name="near_start_ratio"     value="0.65" />
 
-    <!-- far 가중치 0 = near만 사용 -->
-    <param name="far_weight"           value="0.0" />
-    <param name="near_weight"          value="1.0" />
+    <!--
+      [개선] FAR ROI 활성화: far_weight 0.0 → 0.3
+        원거리 ROI를 보조적으로 활용해 커브 방향을 미리 파악
+        near 70% + far 30% 블렌딩
+    -->
+    <param name="far_start_ratio"      value="0.50" />
+    <param name="far_end_ratio"        value="0.62" />
+    <param name="far_weight"           value="0.3" />
+    <param name="near_weight"          value="0.7" />
+
+    <!-- 급커브 감속 트리거 (낮을수록 일찍 감속) -->
+    <param name="curve_rate_threshold" value="150.0" />
 
     <param name="show_debug_window"    value="true" />
   </node>
