@@ -4,9 +4,9 @@
         pkg="line_tracer"
         type="line_tracer_node.py"
         output="screen">
-    <param name="camera_topic"         value="/camera/image" />
 
-    <param name="linear_speed"         value="0.06" />
+    <param name="camera_topic"         value="/camera/image" />
+    <param name="linear_speed"         value="0.05" />
 
     <!-- PID 이득 -->
     <param name="kp"                   value="0.004" />
@@ -21,19 +21,34 @@
     <param name="max_blob_width_ratio" value="0.35" />
 
     <!--
-      Near ROI: 0.65 유지 (하단 35% 구간 인식 → 커브 일찍 감지)
-      FAR ROI: far_weight=0.0 으로 비활성 (노이즈 발산 방지)
-    -->
-    <param name="near_start_ratio"     value="0.65" />
+      [v10] 2단 ROI
+      ┌─────────────────────┐  ← 0%
+      │                     │
+      │  [주황] 예측 ROI    │  ← predict_start_ratio (0.42)
+      │  PRED  42% ~ 56%   │
+      │  [주황끝]           │  ← predict_end_ratio   (0.56)
+      │                     │
+      │  [빨강] 주행 ROI    │  ← drive_start_ratio   (0.58)
+      │  DRIVE 58% ~ 82%   │
+      │  [빨강끝]           │  ← drive_end_ratio     (0.82)
+      │                     │
+      └─────────────────────┘  ← 100%
 
-    <param name="far_start_ratio"      value="0.50" />
-    <param name="far_end_ratio"        value="0.62" />
-    <!-- far 비활성: near만 사용 -->
-    <param name="far_weight"           value="0.0" />
-    <param name="near_weight"          value="1.0" />
+      최종 조향 = DRIVE * 0.75 + PREDICT * 0.25
+      선이 화면 위에 있으면 predict_start_ratio를 낮추세요.
+    -->
+    <param name="predict_start_ratio"  value="0.42" />
+    <param name="predict_end_ratio"    value="0.56" />
+    <param name="drive_start_ratio"    value="0.58" />
+    <param name="drive_end_ratio"      value="0.82" />
+    <param name="drive_weight"         value="0.75" />
+    <param name="predict_weight"       value="0.25" />
 
     <!-- 커브 감속 트리거 -->
-    <param name="curve_rate_threshold" value="150.0" />
+    <param name="curve_rate_threshold" value="120.0" />
+
+    <!-- 선 소실 유지 프레임 -->
+    <param name="lost_max_frames"      value="8" />
 
     <param name="show_debug_window"    value="true" />
   </node>
